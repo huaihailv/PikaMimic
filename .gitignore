@@ -8,7 +8,7 @@ egomimic/debug
 trained_models_highlevel/
 trained_models_lowlevel/
 egomimic/scripts/exps
-experiments*
+experiment_results/
 *.ipynb_checkpoints
 *.mp4
 egomimic/scripts/hand_process/stereo_depth.ipynb
