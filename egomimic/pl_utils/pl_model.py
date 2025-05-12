@@ -103,14 +103,13 @@ class ModelWrapper(LightningModule):
         info["losses"] = TensorUtils.detach(losses)
         self.step_log_all_train.append(self.model.log_info(info))
 
-        # count=0
-        # for name, param in self.named_parameters():
-        #     if param.grad is None:
-        #         count += 1
-        #         # print(name)
-        # print("Unused params: ", count)
-        # print(self.global_step, self.model.global_config.experiment.epoch_every_n_steps)
-        # breakpoint()
+        # 添加global_step的日志记录
+        self.log("global_step", self.global_step, on_step=True, on_epoch=False, sync_dist=True)
+        
+        # 记录每个loss
+        for k, v in losses.items():
+            self.log(f"train/{k}", v, on_step=True, on_epoch=True, sync_dist=True)
+
         return losses["action_loss"]
 
     def configure_optimizers(self):
@@ -205,7 +204,7 @@ class ModelWrapper(LightningModule):
         process = psutil.Process(os.getpid())
         mem_usage = process.memory_info().rss / int(1e9)
         print("\nEpoch {} Memory Usage: {} GB\n".format(self.current_epoch, mem_usage))
-        # self.log('epoch', self.trainer.current_epoch)
+        self.log('epoch', self.trainer.current_epoch)
         self.log("System/RAM Usage (GB)", mem_usage, sync_dist=True)
 
         return super().on_train_epoch_start()

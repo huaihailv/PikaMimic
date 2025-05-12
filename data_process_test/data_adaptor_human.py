@@ -81,21 +81,17 @@ class Adaptor:
         
         return frame
     
-    def resample_to_100_frames(self, data, target_length=100):
-        current_length = data
-        
-        if current_length < target_length:
-            # 如果当前长度小于目标长度，重复最后一帧
-            len = target_length - current_length
-            padded_data = np.tile([current_length-1], len)
-            # padded_data = np.tile(last_frame, (target_length - current_length, 1) + (1,) * (data.ndim - 1))
-            return np.concatenate([np.linspace(0, current_length - 1, current_length, dtype=int), padded_data], axis=0)
-        
-        # 计算均匀抽帧的间隔
-        indices = np.linspace(0, current_length - 1, target_length, dtype=int)
-        # resampled_data = data[indices]
-        
-        return indices
+    def resample_to_fixed_length(self, data_len, target_length=100):
+        if data_len < target_length:
+            # 均匀重复已有帧，而不是仅重复最后一帧
+            repeats = target_length // data_len
+            remainder = target_length % data_len
+            base_indices = np.arange(data_len)
+            indices = np.repeat(base_indices, repeats)
+            extra_indices = np.linspace(0, data_len - 1, remainder, dtype=int)
+            return np.concatenate([indices, extra_indices])
+        else:
+            return np.linspace(0, data_len - 1, target_length, dtype=int)
     
     def human2ego_add_demo(self, human_data:h5py.Group, ego_data:h5py.Group, action_chunk:int):
         '''
@@ -118,49 +114,60 @@ class Adaptor:
                 cam_left_wrist
                 cam_right_wrist
             qpos
-            qvel
         '''
 
         total_frame = len(human_data['head_pose'])
-        data_num = 400
-        # // 5 if total_frame % 5 == 0 else total_frame // 5 + 1  
-        print(f"current file data numbers:{data_num}")
+        print(f"total frames in source data: {total_frame}")
 
-        # create a new demo group
+        ee_pose_all = []
+        front_img_all = []
+
+        prev_ee = None
+        for i in range(total_frame):
+            curr_ee = self.qpos_2_ee_pose(human_data, i)
+
+            if prev_ee is None:
+                delta_ee = np.zeros_like(curr_ee)
+            else:
+                delta_ee = curr_ee - prev_ee
+            prev_ee = curr_ee
+
+            # 跳过几乎无变化的帧
+            if np.linalg.norm(curr_ee) < 1e-5:
+                continue
+
+            ee_pose_all.append(delta_ee)
+            front_img_all.append(human_data['img_front'][i])
+
+        ee_pose_all = np.stack(ee_pose_all)
+        front_img_all = np.stack(front_img_all)
+
+        # 抽帧：在清理填充后再做 resample
+        indices = self.resample_to_fixed_length(len(ee_pose_all), 400)
+        # import pdb 
+        # pdb.set_trace()
+        ee_pose = ee_pose_all[indices]
+        front_img = front_img_all[indices]
+        data_num = len(ee_pose)
+
         obs_group = ego_data.create_group('obs')
 
-        # create 'ee_pose' dataset with compression and chunking
-        ee_pose = np.zeros((data_num, 6))
+        action_xyz = np.zeros((data_num, action_chunk, 6))
+        for i in range(data_num):
+            if i < data_num - action_chunk:
+                action_xyz[i] = ee_pose[i+1:i+1+action_chunk]
+            else:
+                valid_len = data_num - i - 1
+                action_xyz[i, :valid_len] = ee_pose[i+1:data_num]
+                action_xyz[i, valid_len:] = ee_pose[-1]
 
-        # create 'front_img_1' dataset with compression and chunking
-        front_img = np.zeros((data_num, 480, 640, 3))
-        
-        # create joint position dataset
-        joint_pos = np.zeros((data_num, 12))
+        print("start save ego_video in hdf5")
 
-        indices = self.resample_to_100_frames(total_frame, 400)
-        for j in range (len(indices)):
-            i = indices[j]
-            ee_pose[j]  = self.qpos_2_ee_pose(human_data, i)
-            front_img[j] = human_data['img_front'][i]
-            joint_pos[j] = self.qpos_2_joint_positions(human_data, i)
-
-        # create actions
-        action_xyz = self.package_ee_pose_action(data_num, ee_pose, action_chunk)
-        action_joints_pos = self.package_joint_pos_action(data_num, joint_pos, action_chunk)
-        print("start save in ego_video.hdf5")
-        # create obs
-        obs_group.create_dataset(
-            "front_img_1", data=front_img)
-        obs_group.create_dataset(
-            "joint_positions", data=joint_pos)
-        obs_group.create_dataset(
-            "ee_pose", data=ee_pose)
+        obs_group.create_dataset("front_img_1", data=front_img)
+        obs_group.create_dataset("ee_pose", data=ee_pose)
         print("obs_finish")
-        
-        # create actions datasets with compression
+
         ego_data.create_dataset("actions_xyz_act", data=action_xyz)
-        ego_data.create_dataset("actions_joints_act", data=action_joints_pos)
         print("actions_finish")
         
 
@@ -174,16 +181,16 @@ class Adaptor:
             # 遍历当前文件夹中的每个文件
             for filename in filenames:
                 # 检查文件名是否匹配 'data_xx' 模式
-                if filename.startswith('episode_'):
+                if filename.startswith('data_') and filename.endswith('.h5'):
                     # 获取文件的绝对路径
                     file_path = os.path.join(dirpath, filename)
                     episode_files.append(file_path)
         return episode_files
     
-    def human2ego(self, ego_data_path:str, action_chunk:int, human_data_path:str="/home/lvhuaihai/EgoMimic/datasets/video/data_pour3cups_video"):
+    def human2ego(self, ego_data_path:str, action_chunk:int, human_data_path:str="/mnt/hpfs/baaiei/robot_data/vp/groceries"):
         # get filename of all episode #
         files_list = self.find_episode_files(human_data_path)
-
+        print(f"total files: {len(files_list)}")
         # create a new dataset to store the new data        
         ego_data:h5py.File = h5py.File(ego_data_path, 'w')
         data = ego_data.create_group("data")
@@ -238,7 +245,7 @@ class Adaptor:
 if __name__ == "__main__":
     adaptor = Adaptor()
     action_chunk = 50
-    adaptor.human2ego(f"/home/lvhuaihai/EgoMimic/datasets/human_pour3cups_100pairs_{action_chunk}steps_400frames.hdf5", action_chunk = action_chunk)
+    adaptor.human2ego(f"/mnt/hpfs/baaiei/lvhuaihai/EgoMimic/datasets/human_groceries_500pairs_{action_chunk}steps_400frames.hdf5", action_chunk = action_chunk)
     # 路径名字：demo name; pairs number; action chunk; fixed length of each demo;
     # num_samples = fixed length of each demo
     # self.resample_to_100_frames修改参数为fixed length of each demo

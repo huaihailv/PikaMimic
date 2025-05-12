@@ -29,16 +29,6 @@ class Adaptor:
             
     def qpos_2_ee_pose(self, qpos:np.ndarray):
 
-        # r_joint_pos = qpos[0:10]
-        # l_joint_pos = qpos[50:60]
-
-        # l_gripper_joint_pos = qpos[60:65]
-        # r_gripper_joint_pos = qpos[25:30]
-
-        # l_pose6d = qpos[83:89]
-        # r_pose6d = qpos[33:39]
-        # l_quat = pose6D2quat(l_pose6d)
-        # r_quat = pose6D2quat(r_pose6d)
         l_pose6d = qpos[83:89]
         r_pose6d = qpos[33:39]
         l_quat = self.pose6D2quat(l_pose6d)
@@ -47,9 +37,8 @@ class Adaptor:
         r_ee_trans = qpos[30:33]
         l_gripper_pos = np.array([qpos[60]])
         r_gripper_pos = np.array([qpos[10]])
-        # import pdb
-        # pdb.set_trace()
-        return np.concatenate((l_ee_trans, l_quat, l_gripper_pos, r_ee_trans, r_quat, r_gripper_pos))
+
+        return np.concatenate((r_ee_trans, r_quat, r_gripper_pos, l_ee_trans, l_quat, l_gripper_pos))
 
     def package_ee_pose_action(self, data_num:int, ee_pose:np.ndarray, action_chunk:int):
         '''
@@ -90,7 +79,7 @@ class Adaptor:
         l_pos = np.concatenate((l_joint_pos,l_gripper_pos))
         r_pos = np.concatenate((r_joint_pos,r_gripper_pos))
 
-        return np.concatenate((l_pos,r_pos))
+        return np.concatenate((r_pos,l_pos))
 
 
     def cam_high_2_front_img(self, cam:np.ndarray):
@@ -117,7 +106,6 @@ class Adaptor:
         # resampled_data = data[indices]
         
         return indices
-
 
     def rdt2ego_add_demo(self, rdt_data:h5py.Group, ego_data:h5py.Group, action_chunk:int):
         '''
@@ -146,51 +134,69 @@ class Adaptor:
         data_num = 400
         print(f"current file data numbers:{total_frame}")
 
-        # create a new demo group
         obs_group = ego_data.create_group('obs')
 
-        # create 'ee_pose' dataset with compression and chunking
-        ee_pose = np.zeros((data_num, 14))
+        # 首先计算原始pose
+        raw_ee_pose = np.zeros((data_num, 14))
+        raw_joint_pos = np.zeros((data_num, 14))
+        
+        indices = self.resample_to_100_frames(total_frame, 400)
+        for j in range(len(indices)):
+            i = indices[j]
+            raw_ee_pose[j] = self.qpos_2_ee_pose(rdt_data['qpos'][i])
+            raw_joint_pos[j] = self.qpos_2_joint_positions(rdt_data['qpos'][i])
 
-        # create 'front_img_1' dataset with compression and chunking
+        # 计算delta形式
+        ee_pose = np.zeros_like(raw_ee_pose)
+        joint_pos = np.zeros_like(raw_joint_pos)
+        
+        # 第一帧delta设为0
+        ee_pose[0] = np.zeros(14)
+        joint_pos[0] = np.zeros(14)
+        
+        # 后续帧计算delta
+        for i in range(1, data_num):
+            ee_pose[i] = raw_ee_pose[i] - raw_ee_pose[i-1]
+            joint_pos[i] = raw_joint_pos[i] - raw_joint_pos[i-1]
+
         front_img = np.zeros((data_num, 480, 640, 3))
         right_wrist_img = np.zeros((data_num, 480, 640, 3))
         left_wrist_img = np.zeros((data_num, 480, 640, 3))
 
-        # create joint position dataset
-        joint_pos = np.zeros((data_num, 14))
-
-        indices = self.resample_to_100_frames(total_frame, 400)
-        for j in range (len(indices)):
+        for j in range(len(indices)):
             i = indices[j]
-            ee_pose[j]  = self.qpos_2_ee_pose(rdt_data['qpos'][i])
-            joint_pos[j] = self.qpos_2_joint_positions(rdt_data['qpos'][i])
             front_img[j] = cv2.resize(self.cam_high_2_front_img(rdt_data['images']['cam_high'][i]), (640, 480), interpolation=cv2.INTER_LINEAR)
             left_wrist_img[j] = self.cam_high_2_front_img(rdt_data['images']['cam_left_wrist'][i])
             right_wrist_img[j] = self.cam_high_2_front_img(rdt_data['images']['cam_right_wrist'][i])
 
-        # create actions
-        action_xyz = self.package_ee_pose_action(data_num, ee_pose, action_chunk)
-        action_joints_pos = self.package_joint_pos_action(data_num, joint_pos, action_chunk)
-        
-        # create obs
-        obs_group.create_dataset(
-            "front_img_1", data=front_img)
-        obs_group.create_dataset(
-            "joint_positions", data=joint_pos)
-        obs_group.create_dataset(
-            "right_wrist_img", data=right_wrist_img)
-        obs_group.create_dataset(
-            "left_wrist_img", data=left_wrist_img)
-        obs_group.create_dataset(
-            "ee_pose", data=ee_pose)
+        action_xyz = np.zeros((data_num, action_chunk, 14))
+        for i in range(data_num):
+            if i < data_num - action_chunk:
+                action_xyz[i] = ee_pose[i+1:i+1+action_chunk]
+            else:
+                valid_len = data_num - i - 1
+                action_xyz[i, :valid_len] = ee_pose[i+1:data_num]
+                action_xyz[i, valid_len:] = ee_pose[-1]
+
+        action_joint = np.zeros((data_num, action_chunk, 14))
+        for i in range(data_num):
+            if i < data_num - action_chunk:
+                action_joint[i] = joint_pos[i+1:i+1+action_chunk]
+            else:
+                valid_len = data_num - i - 1
+                action_joint[i, :valid_len] = joint_pos[i+1:data_num]
+                action_joint[i, valid_len:] = joint_pos[-1]
+
+        obs_group.create_dataset("front_img_1", data=front_img)
+        obs_group.create_dataset("joint_positions", data=joint_pos)
+        obs_group.create_dataset("right_wrist_img", data=right_wrist_img)
+        obs_group.create_dataset("left_wrist_img", data=left_wrist_img)
+        obs_group.create_dataset("ee_pose", data=ee_pose)
         print("obs_finish")
-        
-        # create actions datasets with compression
+
         ego_data.create_dataset("actions_xyz_act", data=action_xyz)
-        ego_data.create_dataset("actions_joints_act", data=action_joints_pos)
+        ego_data.create_dataset("actions_joints_act", data=action_joint)
         print("actions_finish")
-        
 
     # 递归搜索指定路径下的所有符合条件的文件
     def find_episode_files(self,root_dir):
@@ -266,9 +272,9 @@ class Adaptor:
 if __name__ == "__main__":
     adaptor = Adaptor()
     action_chunk = 50
-    adaptor.rdt2ego(ego_data_path=f"/mnt/hpfs/baaiei/lvhuaihai/EgoMimic/datasets/cobot_groceries_100pairs_400frame_{action_chunk}ac.hdf5", \
+    adaptor.rdt2ego(ego_data_path=f"/share/project/lvhuaihai/lvhuaihai/EgoMimic/datasets/cobot_build_blocks_500pairs_400frame_{action_chunk}ac.hdf5", \
         action_chunk = action_chunk, \
-        rdt_data_path="/mnt/hpfs/baaiei/robot_data/agilex/stack_basket/task_put_black_brown_basket_4.1")
+        rdt_data_path="/share/project/lvhuaihai/robot_data/agilex/robohetero/build_blocks")
     # 路径名字：demo name; pairs number; action chunk; fixed length of each demo;
     # num_samples = fixed length of each demo
     # self.resample_to_100_frames修改参数为fixed length of each demo

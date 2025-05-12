@@ -2,7 +2,7 @@
     "algo_name": "pikamimic",
     "experiment": {
         "name": "PikaMimic",
-        "description": "stackbasket_agilex_pika",
+        "description": "buildblock_agilex_pika",
         "validate": true,
         "logging": {
             "terminal_output_to_txt": true,
@@ -12,7 +12,7 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 100,
+            "every_n_epochs": 500,
             "top_n": 5,
             "epochs": [],
             "on_best_validation": true,
@@ -20,7 +20,7 @@
             "on_best_rollout_success_rate": true,
             "video_freq": 30000
         },
-        "epoch_every_n_steps": 100,
+        "epoch_every_n_steps": 500,
         "validation_freq": 30000,
         "validation_max_samples": 15000,
         "env": null,
@@ -39,9 +39,9 @@
         }
     },
     "train": {
-        "data": "/home/lvhuaihai/EgoMimic/datasets/cobot_groceries_100pairs_400frame_50ac.hdf5",
+        "data": "/share/project/lvhuaihai/lvhuaihai/EgoMimic/datasets/cobot_build_blocks_500pairs_400frame_50ac.hdf5",
         "data_type": "robot",
-        "data_2": "/home/lvhuaihai/EgoMimic/datasets/pika_stackbasket_200pairs_400frame_50ac.hdf5",
+        "data_2": "/share/project/lvhuaihai/lvhuaihai/EgoMimic/datasets/pika_build_blocks_1000pairs_400frame_50ac.hdf5",
         "data_2_type": "hand",
         "output_dir":"../experiment_results",
         "num_data_workers": 8,

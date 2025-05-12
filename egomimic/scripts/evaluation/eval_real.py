@@ -343,12 +343,6 @@ def main(args):
     np.random.seed(101)
     torch.manual_seed(101)
 
-    # print("\n============= New Training Run with Config =============")
-    # print(config)
-    # print("")
-    # log_dir, ckpt_dir, video_dir, uid = get_exp_dir(config)
-
-    # breakpoint()
     model = ModelWrapper.load_from_checkpoint(args.eval_path, datamodule=None)
     norm_stats = os.path.join(os.path.dirname(os.path.dirname(args.eval_path)), "ds1_norm_stats.pkl")
     norm_stats = open(norm_stats, "rb")

@@ -103,7 +103,6 @@ class Adaptor:
         
         # 计算均匀抽帧的间隔
         indices = np.linspace(0, current_length - 1, target_length, dtype=int)
-        # resampled_data = data[indices]
         
         return indices
 
@@ -154,19 +153,27 @@ class Adaptor:
         # create joint position dataset
         joint_pos = np.zeros((data_num, 14))
 
+        prev_ee = None
+        
         indices = self.resample_to_100_frames(total_frame, 400)
-        for j in range (len(indices)):
+        for j in range(len(indices)):
             i = indices[j]
-            ee_pose[j]  = self.qpos_2_ee_pose(rdt_data, i)
-            # joint_pos[j] = self.qpos_2_joint_positions(rdt_data['qpos'][i])
+            curr_ee = self.qpos_2_ee_pose(rdt_data, i)
+            # curr_joint = self.qpos_2_joint_positions(rdt_data, i)
+
+            if prev_ee is None:
+                ee_pose[j] = np.zeros_like(curr_ee)
+            else:
+                ee_pose[j] = curr_ee - prev_ee
+            prev_ee = curr_ee
+
             front_img[j] = cv2.resize(camera_f[i], (640, 480), interpolation=cv2.INTER_LINEAR)
             left_wrist_img[j] = camera_l[i]
             right_wrist_img[j] = camera_r[i]
 
         # create actions
         action_xyz = self.package_ee_pose_action(data_num, ee_pose, action_chunk)
-        action_joints_pos = self.package_joint_pos_action(data_num, joint_pos, action_chunk)
-        
+
         # create obs
         obs_group.create_dataset(
             "front_img_1", data=front_img)
@@ -182,7 +189,7 @@ class Adaptor:
         
         # create actions datasets with compression
         ego_data.create_dataset("actions_xyz_act", data=action_xyz)
-        ego_data.create_dataset("actions_joints_act", data=action_joints_pos)
+        # ego_data.create_dataset("actions_joints_act", data=action_joints_pos)
         print("actions_finish")
         
 
@@ -285,9 +292,9 @@ class Adaptor:
 if __name__ == "__main__":
     adaptor = Adaptor()
     action_chunk = 50
-    adaptor.rdt2ego(ego_data_path=f"/mnt/hpfs/baaiei/lvhuaihai/EgoMimic/datasets/pika_stackbasket_200pairs_400frame_{action_chunk}ac.hdf5", \
+    adaptor.rdt2ego(ego_data_path=f"/share/project/lvhuaihai/lvhuaihai/EgoMimic/datasets/pika_build_blocks_1000pairs_400frame_{action_chunk}ac.hdf5", \
         action_chunk = action_chunk, \
-        rdt_data_path="/mnt/hpfs/baaiei/robot_data/pika/blasket_stacking3/task_8-25-04-02")
+        rdt_data_path="/share/project/lvhuaihai/robot_data/pika/build_blocks")
     # 路径名字：demo name; pairs number; action chunk; fixed length of each demo;
     # num_samples = fixed length of each demo
     # self.resample_to_100_frames修改参数为fixed length of each demo
